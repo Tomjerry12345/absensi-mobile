@@ -47,6 +47,7 @@ dependencies:
   equatable: ^2.0.3
   get: ^4.6.5
   flutter_mailer: ^2.0.2
+  permission_handler: ^10.2.0
   
 
 dev_dependencies:

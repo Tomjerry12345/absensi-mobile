@@ -1,15 +1,16 @@
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_application_1/Utils/Utilitas.dart';
 import 'package:flutter_application_1/Utils/Utils.dart';
 import 'package:flutter_application_1/presentation/pages/my_page.dart';
 import 'package:flutter_application_1/presentation/resources/warna.dart';
-import 'package:get/get.dart';
-
+import 'package:permission_handler/permission_handler.dart';
 import '../resources/gambar.dart';
 import 'package:qrscan/qrscan.dart' as scanner;
 import 'package:intl/intl.dart';
+import 'dart:math';
 
 import '../widgets/attendance_card.dart';
 
@@ -21,123 +22,169 @@ class CheckPage extends StatefulWidget {
 }
 
 class _CheckPageState extends State<CheckPage> {
-  Future<void> scanQR() async {
+  final _chars =
+      'AaBbCcDdEeFfGgHhIiJjKkLlMmNnOoPpQqRrSsTtUuVvWwXxYyZz1234567890';
+  Random _rnd = Random();
+
+  String getRandomString(int length) => String.fromCharCodes(Iterable.generate(
+      length, (_) => _chars.codeUnitAt(_rnd.nextInt(_chars.length))));
+
+  Future<void> permissionCamera() async {
+    var status = await Permission.camera.status;
+
+    if (status.isDenied) {
+      var isGranted = await Permission.camera.request();
+
+      if (isGranted.isPermanentlyDenied) {
+        openAppSettings();
+      }
+
+      if (isGranted.isGranted) {
+        qrCodeScan();
+      }
+    }
+
+    if (status.isGranted) {
+      qrCodeScan();
+    }
+  }
+
+  Future<void> qrCodeScan() async {
     String? result = await scanner.scan();
     if (result != null) {
+      logO("result", result);
       FirebaseAuth auth = FirebaseAuth.instance;
       FirebaseFirestore firestore = FirebaseFirestore.instance;
-      String uid = auth.currentUser!.uid;
-      DateTime now = DateTime.now();
-      String todayDocID =
-          DateFormat().add_yMd().format(now).replaceAll("/", "-");
 
-      var date = todayDocID.split("-");
+      DocumentReference<Map<String, dynamic>> fScanCode =
+          await firestore.collection("code").doc("generate");
 
-      DocumentSnapshot<Map<String, dynamic>> getUser =
-          await firestore.collection("users").doc(uid).get();
-      CollectionReference cPresent = firestore.collection("present");
-      QuerySnapshot<Object?> getPresent = await cPresent
-          .where("idUser", isEqualTo: uid)
-          .where("tanggal.hari", isEqualTo: date[1])
-          .get();
+      DocumentSnapshot<Map<String, dynamic>> getScanCode =
+          await fScanCode.get();
 
-      var time = now.hour * 60 + now.minute;
-      var tambahData = false;
+      if (getScanCode["uid"] == result) {
+        String uid = auth.currentUser!.uid;
+        DateTime now = DateTime.now();
+        String todayDocID =
+            DateFormat().add_yMd().format(now).replaceAll("/", "-");
 
-      if (getPresent.size == 0) {
-        var user = getUser.data();
-        var keterangan = "";
+        var date = todayDocID.split("-");
 
-        if (time >= 450 && time <= 500) {
-          keterangan = "Tepat Waktu";
-          tambahData = true;
-        } else if (time > 500 && time <= 550) {
-          keterangan = "Terlambat";
-          tambahData = true;
-        }
+        var formatDate = DateFormat('HH:mm').format(now);
 
-        if (tambahData) {
-          cPresent.add({
-            "idUser": uid,
-            "nama": user!["nama"],
-            "tanggal": {"hari": date[1], "bulan": date[0], "tahun": date[2]},
-            "waktu_datang": {"jam": now.hour, "menit": now.minute},
-            "keterangan_waktu_datang": keterangan,
-            "waktu_pulang": {},
-            "keterangan_waktu_pulang": "-",
-            "durasi": 0,
-            "lembur": 0,
-            "gaji_pokok": 0,
-            "gaji_terlambat": 0,
-            "gaji_lembur": 0
-          });
-          Utils.showSnackBar("Berhasil mengabsen", Colors.green);
-        } else {
-          Utils.showSnackBar("Anda tidak bisa mengisi absen", Colors.red);
-        }
-      } else {
-        var keterangan = "";
-        var gajiLembur = 0;
-        var lembur = 0;
-        var dataP = getPresent.docs.first;
+        DocumentSnapshot<Map<String, dynamic>> getUser =
+            await firestore.collection("users").doc(uid).get();
+        CollectionReference cPresent = firestore.collection("present");
+        QuerySnapshot<Object?> getPresent = await cPresent
+            .where("idUser", isEqualTo: uid)
+            .where("tanggal.hari", isEqualTo: date[1])
+            .get();
 
-        // if (dataP["waktu_pulang"]["jam"] == null) {
-        if (time >= 960 && time <= 990) {
-          keterangan = "Pulang Cepat";
-          tambahData = true;
-        } else if (time >= 1000 && time <= 1020) {
-          keterangan = "Pulang tepat waktu";
-          tambahData = true;
-        } else if (time >= 1140 && time <= 1380) {
-          var wLembur = (now.hour - 19) + 1;
-          keterangan = "Lembur";
-          tambahData = true;
-          lembur = wLembur;
-          gajiLembur = 25000 * lembur;
-        }
-        // }
+        var time = now.hour * 60 + now.minute;
+        var tambahData = false;
 
-        if (tambahData) {
-          var doc = getPresent.docs.first.id;
-          var waktuDatang = dataP.get("waktu_datang");
-          var durasi = now.hour - waktuDatang["jam"];
-          var ketWaktuDatang = dataP.get("keterangan_waktu_datang");
-          var gajiTerlambat = 0;
+        if (getPresent.size == 0) {
+          var user = getUser.data();
+          var keterangan = "";
 
-          if (ketWaktuDatang == "Terlambat") {
-            var waktuTerlambat =
-                (waktuDatang["jam"] * 60) + waktuDatang["menit"];
-
-            var min = 550 - waktuTerlambat;
-            var s = min.toString().split("");
-
-            if (int.parse(s[1]) > 5) {
-              s[0] = (int.parse(s[0]) + 1).toString();
-            }
-
-            int cS = int.parse(s[0]);
-
-            gajiTerlambat = cS * 5000;
+          if (time >= 450 && time <= 500) {
+            keterangan = "Tepat Waktu";
+            tambahData = true;
+          } else if (time > 500 && time <= 550) {
+            keterangan = "Terlambat";
+            tambahData = true;
           }
 
-          cPresent.doc(doc).update({
-            "waktu_pulang": {"jam": now.hour, "menit": now.minute},
-            "keterangan_waktu_pulang": keterangan,
-            "durasi": durasi,
-            "lembur": lembur,
-            "gaji_pokok": 100000,
-            "gaji_terlambat": gajiTerlambat,
-            "gaji_lembur": gajiLembur
-          });
-
-          Utils.showSnackBar("Berhasil mengabsen", Colors.green);
+          if (tambahData) {
+            cPresent.add({
+              "idUser": uid,
+              "nama": user!["nama"],
+              "tanggal": {"hari": date[1], "bulan": date[0], "tahun": date[2]},
+              "waktu_datang": {"jam": now.hour, "menit": now.minute},
+              "view_waktu_datang": formatDate,
+              "keterangan_waktu_datang": keterangan,
+              "waktu_pulang": {},
+              "view_waktu_pulang": "-",
+              "keterangan_waktu_pulang": "-",
+              "durasi": 0,
+              "lembur": 0,
+              "gaji_pokok": 0,
+              "gaji_terlambat": 0,
+              "gaji_lembur": 0
+            });
+            Utils.showSnackBar("Berhasil mengabsen", Colors.green);
+          } else {
+            Utils.showSnackBar("Anda tidak bisa mengisi absen", Colors.red);
+          }
         } else {
-          Utils.showSnackBar("Anda tidak bisa mengisi absen", Colors.red);
+          var keterangan = "";
+          var gajiLembur = 0;
+          var lembur = 0;
+          var dataP = getPresent.docs.first;
+
+          // if (dataP["waktu_pulang"]["jam"] == null) {
+          if (time >= 960 && time <= 990) {
+            keterangan = "Pulang Cepat";
+            tambahData = true;
+          } else if (time >= 1000 && time <= 1020) {
+            keterangan = "Pulang tepat waktu";
+            tambahData = true;
+          } else if (time >= 1140 && time <= 1380) {
+            var wLembur = (now.hour - 19) + 1;
+            keterangan = "Lembur";
+            tambahData = true;
+            lembur = wLembur;
+            gajiLembur = 25000 * lembur;
+          }
+          // }
+
+          if (tambahData) {
+            var doc = getPresent.docs.first.id;
+            var waktuDatang = dataP.get("waktu_datang");
+            var durasi = now.hour - waktuDatang["jam"];
+            var ketWaktuDatang = dataP.get("keterangan_waktu_datang");
+            var gajiTerlambat = 0;
+
+            if (ketWaktuDatang == "Terlambat") {
+              var waktuTerlambat =
+                  (waktuDatang["jam"] * 60) + waktuDatang["menit"];
+
+              var min = 550 - waktuTerlambat;
+              var s = min.toString().split("");
+
+              if (int.parse(s[1]) > 5) {
+                s[0] = (int.parse(s[0]) + 1).toString();
+              }
+
+              int cS = int.parse(s[0]);
+
+              gajiTerlambat = cS * 5000;
+            }
+
+            cPresent.doc(doc).update({
+              "waktu_pulang": {"jam": now.hour, "menit": now.minute},
+              "view_waktu_pulang": formatDate,
+              "keterangan_waktu_pulang": keterangan,
+              "durasi": durasi,
+              "lembur": lembur,
+              "gaji_pokok": 100000,
+              "gaji_terlambat": gajiTerlambat,
+              "gaji_lembur": gajiLembur
+            });
+
+            Utils.showSnackBar("Berhasil mengabsen", Colors.green);
+          } else {
+            Utils.showSnackBar("Anda tidak bisa mengisi absen", Colors.red);
+          }
         }
+
+        fScanCode.update({"uid": getRandomString(20)});
+      } else {
+        Utils.showSnackBar("QR Code Expired", Colors.red);
       }
     } else {
       // Jika result bernilai null, Anda bisa menampilkan pesan kesalahan atau melakukan tindakan lain
-      print('Tidak berhasil membaca QR code');
+      Utils.showSnackBar("Tidak berhasil membaca QR code'", Colors.red);
     }
   }
 
@@ -243,7 +290,7 @@ class _CheckPageState extends State<CheckPage> {
                               Title(
                                 color: Warna.putih,
                                 child: Text(
-                                  (DateFormat('KK:mm').format(DateTime.now())),
+                                  (DateFormat('HH:mm').format(DateTime.now())),
                                   style: TextStyle(
                                     color: Warna.putih,
                                     fontSize: 32,
@@ -291,7 +338,7 @@ class _CheckPageState extends State<CheckPage> {
                                       setState(() {
                                         _isCheckIn = false;
                                       });
-                                      scanQR();
+                                      permissionCamera();
                                     },
                                   )
                                 : null)
@@ -332,11 +379,8 @@ class _CheckPageState extends State<CheckPage> {
 
                     return AttendanceCard(
                       date: date,
-                      checkIn:
-                          "${data["waktu_datang"]["jam"]}:${data["waktu_datang"]["menit"]}",
-                      checkout: data["waktu_pulang"]["jam"] == null
-                          ? "-"
-                          : "${data["waktu_pulang"]["jam"]}:${data["waktu_pulang"]["menit"]}",
+                      checkIn: data["view_waktu_datang"],
+                      checkout: data["view_waktu_pulang"],
                     );
                   },
                 );
